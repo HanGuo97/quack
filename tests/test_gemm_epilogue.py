@@ -701,6 +701,56 @@ def test_epi_mod_gated_operands_and_d(cluster_M):
     _rel_check(D, x, "D writeback")
 
 
+@pytest.mark.parametrize("cluster_M", [1, 2])
+def test_epi_mod_gated_full_width_output(cluster_M):
+    """GemmGated as a mod plus a full-width TileStore(gated=False) output: the fn
+    returns the raw acc Pair, stored interleaved like D, and postact is unchanged."""
+
+    @gemm_epilogue(outputs=("postact", TileStore("preact", gated=False)), mode="acc_pair")
+    def swiglu_preact_mod(acc):
+        gate, up = unpack(acc)
+        return {"postact": swiglu(gate, up), "preact": acc}
+
+    device = "cuda"
+    torch.random.manual_seed(6)
+    l, m, N, k = 2, 512, 2048, 736
+    A = torch.randn((l, m, k), device=device, dtype=torch.bfloat16) / math.sqrt(k) * 4
+    B = torch.randn((l, N, k), device=device, dtype=torch.bfloat16) / math.sqrt(k) * 4
+    postact = torch.empty((l, m, N // 2), device=device, dtype=torch.bfloat16)
+    preact = torch.empty((l, m, N), device=device, dtype=torch.bfloat16)
+
+    swiglu_preact_mod.gemm(
+        A,
+        B,
+        None,
+        epi_args=dict(postact=postact, preact=preact),
+        tile_M=128,
+        tile_N=256,
+        cluster_M=cluster_M,
+        cluster_N=1,
+    )
+
+    x = torch.einsum("lmk,lnk->lmn", A.float(), B.float())
+    gate, up = x[..., 0::2], x[..., 1::2]
+    ref = torch.nn.functional.silu(gate) * up
+    _rel_check(preact, x, "preact")
+    _rel_check(postact, ref, "postact")
+
+    postact2 = torch.empty_like(postact)
+    swiglu_mod.gemm(
+        A,
+        B,
+        None,
+        epi_args=dict(postact=postact2),
+        tile_M=128,
+        tile_N=256,
+        cluster_M=cluster_M,
+        cluster_N=1,
+    )
+    # The full-width output leaves postact untouched.
+    assert torch.equal(postact, postact2)
+
+
 def _dswiglu_torch_ref(x, y, dout):
     xg = x.detach().requires_grad_()
     yg = y.detach().requires_grad_()
