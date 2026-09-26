@@ -466,7 +466,7 @@ def prune_invalid_gemm_configs(configs, named_args: dict, **kwargs):
     configs=[AutotuneConfig(config=c) for c in get_all_configs()],
     key=["dynamic_scheduler", "split_k", "split_k_mode", "bs_format_a", "bs_format_b"],
     prune_configs_by={"early_config_prune": prune_invalid_gemm_configs},
-    # add_to_output (and a C that aliases out) reads out: tuning must leave it as it was
+    # out is read when add_to_output is set or C aliases it
     restore_value=["out"],
 )
 def gemm_tuned(
