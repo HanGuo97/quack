@@ -80,13 +80,13 @@ def test_eager_full_width_output():
     # TileStore(gated=False) one at full N
     res = _swiglu_preact(A, B, config=CFG, store_d=False)
     ref_preact = A.float() @ B.float()
-    assert set(res) == {"postact", "preact"}
-    assert res["postact"].shape == (ref_preact.shape[0], ref_preact.shape[1] // 2)
-    assert res["preact"].shape == ref_preact.shape
-    torch.testing.assert_close(res["preact"].float(), ref_preact, atol=2e-2, rtol=2e-2)
     ref_gate, ref_up = ref_preact[:, 0::2], ref_preact[:, 1::2]
     ref_postact = torch.nn.functional.silu(ref_gate) * ref_up
+    assert set(res) == {"postact", "preact"}
+    assert res["postact"].shape == ref_postact.shape
+    assert res["preact"].shape == ref_preact.shape
     torch.testing.assert_close(res["postact"].float(), ref_postact, atol=2e-2, rtol=2e-2)
+    torch.testing.assert_close(res["preact"].float(), ref_preact, atol=2e-2, rtol=2e-2)
 
 
 def test_reduce_finalized():
