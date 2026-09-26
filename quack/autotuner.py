@@ -196,7 +196,6 @@ class Autotuner:
         # workload the user actually runs.
         l2_cold_arg_sets = getattr(self, "_l2_cold_arg_sets", None)
         l2_cold_kwarg_sets = getattr(self, "_l2_cold_kwarg_sets", None)
-
         use_l2_cold = (
             self._do_bench is None
             and l2_cold_arg_sets is not None
