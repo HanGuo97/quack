@@ -879,7 +879,9 @@ class EpiMod:
             import torch
 
             aux = epi_args[out_name]
+            op = self.output_ops.get(out_name)
             # acc_pair outputs are half of GEMM N, unless declared TileStore(gated=False)
+            paired_acc_gated = paired_acc and (op is None or op.gated)
             out_n = n_gemm // 2 if paired_acc_gated else n_gemm
             if aux.dtype == torch.float4_e2m1fn_x2:
                 out_n //= 2  # fp4 values are stored packed, two per byte
@@ -1184,7 +1186,8 @@ class EpiMod:
 
         for name in self.outputs:
             if out.get(name) is None:
-                paired_acc_gated = self.mode == "acc_pair"
+                op = self.output_ops.get(name)
+                paired_acc_gated = self.mode == "acc_pair" and (op is None or op.gated)
                 n_store = n // 2 if paired_acc_gated else n
                 out[name] = torch.empty((*lead, n_store), dtype=dt, device=A.device)
 
