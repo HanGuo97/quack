@@ -133,6 +133,7 @@ class Autotuner:
 
         if len(self.restore_value) > 0:
 
+            @torch.no_grad()
             def _pre_hook(kwargs):
                 self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
 
@@ -142,6 +143,7 @@ class Autotuner:
 
         if len(self.restore_value) > 0:
 
+            @torch.no_grad()
             def _post_hook(kwargs, exception):
                 for name in self.restore_value:
                     kwargs[name].copy_(self.restore_copies[name])
