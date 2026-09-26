@@ -49,7 +49,9 @@ guesses about vectorization.
   and D two lanes per f32 element — and expressed in the body via
   ``unpack``/``pack`` (see :class:`Pair`, whose arithmetic is lane-wise).
   ``paired=("acc",)`` declares pairing when tensors give no signal (RoPE:
-  full-width D, no aux).
+  full-width D, no aux). Paired outputs are half of GEMM-N; declare one as
+  ``TileStore(name, gated=False)`` to keep it full width: the fn returns a
+  Pair for it (e.g. the raw ``acc``), stored interleaved like D.
 * SINKS: ``outputs=(names,)`` declares aux tile stores (each TileStore owns
   its own dtype/rounding, so multiple mixed-dtype outputs compose); ``reduces={name:
   ColVecReduce/RowVecReduce(name, combine="add"|"max"|"max_abs")}`` declares reduce
@@ -476,8 +478,6 @@ class EpiMod:
             op = self.output_ops.get(out_name)
             if op is None:
                 op = TileStore(out_name, gated=paired_acc)
-            elif paired_acc and not op.gated:
-                raise ValueError(f"output op {out_name!r} must be gated in acc_pair mode")
             epi_ops.append(op)
         epi_ops.extend(self.sinks.values())
         epi_ops.extend(self.extra_ops)
@@ -879,11 +879,12 @@ class EpiMod:
             import torch
 
             aux = epi_args[out_name]
-            out_n = n_gemm // 2 if paired_acc else n_gemm
+            # acc_pair outputs are half of GEMM N, unless declared TileStore(gated=False)
+            out_n = n_gemm // 2 if paired_acc_gated else n_gemm
             if aux.dtype == torch.float4_e2m1fn_x2:
                 out_n //= 2  # fp4 values are stored packed, two per byte
             _require_shape(out_name, aux, _tile_shape(batch, m, out_n, varlen_m))
-            if paired_acc:
+            if paired_acc_gated:
                 # fp8/fp4 gated aux = quantized postact (SM100-only; the
                 # TileStore op asserts the arch at trace time).
                 if aux.element_size() != 2 and aux.dtype not in (
@@ -892,8 +893,8 @@ class EpiMod:
                     torch.float4_e2m1fn_x2,
                 ):
                     raise TypeError("acc_pair auxiliary output must be 16-bit (or fp8/fp4)")
-                if aux.stride(-1) != 1 or (D is not None and D.stride(-1) != 1):
-                    raise ValueError("acc_pair auxiliary output and D must be N-major")
+            if paired_acc and (aux.stride(-1) != 1 or (D is not None and D.stride(-1) != 1)):
+                raise ValueError("acc_pair auxiliary output and D must be N-major")
         # Swap-at-trace relabels pinned vec pins into KERNEL coordinates: a
         # caller colvec is the swapped kernel's rowvec (and vice versa), so the
         # pin's class flips for this call. Other orientation-sensitive vec pins
@@ -1180,10 +1181,13 @@ class EpiMod:
                 out["D"] = torch.empty_like(C)
             else:
                 out["D"] = torch.empty((*lead, n), dtype=dt, device=A.device)
-        n_store = n // 2 if self.mode == "acc_pair" else n
+
         for name in self.outputs:
             if out.get(name) is None:
+                paired_acc_gated = self.mode == "acc_pair"
+                n_store = n // 2 if paired_acc_gated else n
                 out[name] = torch.empty((*lead, n_store), dtype=dt, device=A.device)
+
         return out
 
     def _alloc_sinks(self, epi_args, lead, n, config, device, blockscaled=False, num_seqs=None):
@@ -1755,7 +1759,8 @@ def gemm_epilogue(
 
     ``mode='acc_pair'`` is expressed in the fn body with ``unpack``/``pack``
     (see :class:`Pair`): gated is ``gate, up = unpack(acc)`` with a
-    half-of-GEMM-N aux buffer
+    half-of-GEMM-N aux buffer (declare ``TileStore(name, gated=False)`` for a
+    full-width one that takes a Pair, like D)
     (per-pair aux is 16-bit n-major; interleave gate/up along N in B exactly
     as with the hand-written kernels; row/tile/c operands arrive paired, col
     operands as one scalar since they broadcast along N). Use
