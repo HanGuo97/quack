@@ -884,7 +884,7 @@ class EpiMod:
             if aux.dtype == torch.float4_e2m1fn_x2:
                 out_n //= 2  # fp4 values are stored packed, two per byte
             _require_shape(out_name, aux, _tile_shape(batch, m, out_n, varlen_m))
-            if paired_acc_gated:
+            if paired_acc:
                 # fp8/fp4 gated aux = quantized postact (SM100-only; the
                 # TileStore op asserts the arch at trace time).
                 if aux.element_size() != 2 and aux.dtype not in (
@@ -893,8 +893,8 @@ class EpiMod:
                     torch.float4_e2m1fn_x2,
                 ):
                     raise TypeError("acc_pair auxiliary output must be 16-bit (or fp8/fp4)")
-            if paired_acc and (aux.stride(-1) != 1 or (D is not None and D.stride(-1) != 1)):
-                raise ValueError("acc_pair auxiliary output and D must be N-major")
+                if aux.stride(-1) != 1 or (D is not None and D.stride(-1) != 1):
+                    raise ValueError("acc_pair auxiliary output and D must be N-major")
         # Swap-at-trace relabels pinned vec pins into KERNEL coordinates: a
         # caller colvec is the swapped kernel's rowvec (and vice versa), so the
         # pin's class flips for this call. Other orientation-sensitive vec pins
