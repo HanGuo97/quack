@@ -309,8 +309,11 @@ class _EpiModMixinBase(ComposableEpiMixin):
                     for name, kind in self._epi_mod_operands
                 }
                 res = fn(Pair(acc0[i], acc1[i]), **kw)
-                for oname, ofrag in zip(self._epi_mod_outputs, outs):
+                for oname, ofrag in half_width_outs:
                     ofrag[i] = res[oname]
+                for oname, (o0, o1) in full_width_outs:
+                    v = res[oname]
+                    o0[i], o1[i] = v[0], v[1]
                 for (s0, s1), sname in zip(sink_views, self._epi_mod_sinks):
                     v = res[sname]
                     s0[i], s1[i] = v[0], v[1]
