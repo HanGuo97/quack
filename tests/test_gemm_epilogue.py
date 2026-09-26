@@ -6,7 +6,14 @@ fn frontend must produce the same math the mixin produces.
 """
 
 import pytest
-from quack.epilogue.ops import ColVecReduce, OnlineLSEReduce, RowVecReduce, Scalar, TileLoad
+from quack.epilogue.ops import (
+    ColVecReduce,
+    OnlineLSEReduce,
+    RowVecReduce,
+    Scalar,
+    TileLoad,
+    TileStore,
+)
 from quack.epilogue.frontend import gemm_epilogue, pack, unpack
 from quack.gemm_config import cta_tile_shape_m
 from quack.gemm_runtime.host import resolve_gemm_class
@@ -36,7 +43,7 @@ from quack.epilogue.rotary import (
     rope_table_ldg_epi,
     xpos_posfreq_epi,
 )
-from quack.activation import dswiglu_oai_tanh
+from quack.activation import dswiglu_oai_tanh, swiglu
 from quack.epilogue.library import (
     amax_epi,
     dgelu_dbias_mod,
