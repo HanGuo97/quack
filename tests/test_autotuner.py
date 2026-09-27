@@ -134,7 +134,7 @@ def test_autotune_wedged_pool_falls_back_in_process(monkeypatch):
 def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad):
     """When the L2-cold clone sets do not fit, the legacy bench runs the trials
     on the caller's tensor and restores it after each one, so delta is added to
-    it exactly once, also for a requires-grad arg in grad mode.
+    it exactly once. With requires_grad, the restore hooks must run under no_grad.
     """
     import torch
 
@@ -164,7 +164,9 @@ def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad)
     torch.manual_seed(0)
     buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
     delta = torch.randn_like(buf0)
-    buf = buf0.clone().requires_grad_(requires_grad)
+    # A view from chunk(): after an in-place write, grad mode rejects any op on it, even
+    # the pre-hook's clone. With requires_grad, the test fails unless both hooks use no_grad.
+    buf = torch.cat([buf0, buf0], dim=0).requires_grad_(requires_grad).chunk(2, dim=0)[0]
     tuner(buf, delta)
 
     assert launches.count(buf.data_ptr()) > 3  # the trials ran on the caller's tensor
@@ -246,7 +248,8 @@ def test_autotune_restore_value_on_compile_pending(monkeypatch):
     raised_once = set()
 
     def kernel(acc, x, block: int = 0):
-        # Every config is "cold": its first invocation writes, then defers.
+        # Every config is "cold": its first invocation writes, then defers, like a
+        # fn whose first kernel ran while its second is still compiling.
         acc.add_(x)
         if block not in raised_once:
             raised_once.add(block)
@@ -287,8 +290,7 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     import torch
 
     from quack import autotuner
-    from quack.cute_dsl_utils import get_device_capacity
-    from quack.gemm_interface import gemm_add, gemm_tuned
+    from quack.gemm_interface import gemm_add, gemm_tuned, prune_invalid_gemm_configs
 
     def fail(*args, **kwargs):
         raise torch.OutOfMemoryError("forced clone failure")
@@ -304,10 +306,6 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
 
     monkeypatch.setattr(gemm_tuned, "fn", recording_gemm)
 
-    # The prune keeps only this arch's configs: take three of them for a short tune.
-    arch = get_device_capacity(torch.device("cuda"))[0]
-    configs = [c for c in gemm_tuned.configs if c.kwargs["config"].device_capacity == arch][:3]
-    monkeypatch.setattr(gemm_tuned, "configs", configs)
     # A cached pick (in memory or on disk) would skip the trials: force a fresh tune.
     monkeypatch.setattr(gemm_tuned, "cache", {})
     monkeypatch.setattr(gemm_tuned, "cache_results", False)
@@ -317,6 +315,9 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     A = torch.randn(m, k, dtype=torch.bfloat16, device="cuda")
     B = torch.randn(k, n, dtype=torch.bfloat16, device="cuda")
     out = torch.randn(m, n, dtype=torch.float32, device="cuda")
+    # Three configs the prune keeps, for a short tune.
+    pruned_configs = prune_invalid_gemm_configs(gemm_tuned.configs, {"A": A})[:3]
+    monkeypatch.setattr(gemm_tuned, "configs", pruned_configs)
     ref = out + A.float() @ B.float()
     gemm_add(A=A, B=B, C=out, out=out, tuned=True)
 
