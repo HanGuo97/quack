@@ -139,6 +139,7 @@ def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad)
         raise torch.OutOfMemoryError("forced clone failure")
 
     monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
+    monkeypatch.delenv("QUACK_CACHE_AUTOTUNING", raising=False)  # a disk-cached pick skips trials
 
     launches = []
 
@@ -183,6 +184,7 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
         return bench_l2_cold(*args, extra_kwargs=extra_kwargs, **kwargs)
 
     monkeypatch.setattr(autotuner, "_bench_cuda_graph_l2_rotate", recording_bench_l2_cold)
+    monkeypatch.delenv("QUACK_CACHE_AUTOTUNING", raising=False)  # a disk-cached pick skips trials
 
     launches = []
 
@@ -233,6 +235,7 @@ def test_autotune_restore_value_on_compile_pending(monkeypatch):
 
     stub = _StubPool()
     monkeypatch.setattr(async_compile, "_active_pool", stub)
+    monkeypatch.delenv("QUACK_CACHE_AUTOTUNING", raising=False)  # a disk-cached pick skips trials
 
     raised_once = set()
 
@@ -259,7 +262,10 @@ def test_autotune_restore_value_on_compile_pending(monkeypatch):
     buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
     delta = torch.randn_like(buf0)
     buf = buf0.clone()
-    tuner(buf, delta)
+    try:
+        tuner(buf, delta)
+    except CompilePending:  # the quack pytest plugin would report it as a pass
+        pytest.fail("CompilePending escaped the autotuner")
 
     assert stub.polls == {str(b) * 64: 2 for b in (0, 1, 2)}  # one rotation, one release each
     assert len(tuner.configs_timings) == 3
@@ -269,8 +275,8 @@ def test_autotune_restore_value_on_compile_pending(monkeypatch):
 @pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
 def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     """gemm_add with C = out takes the add_to_output path, which reads out: when
-    the L2-cold clone sets do not fit, the trials run on out itself and restore
-    it, so A @ B is added to out exactly once.
+    the L2-cold clone sets do not fit, the legacy bench runs the trials on out
+    itself and restores it, so A @ B is added to out exactly once.
     """
     import torch
 
@@ -282,6 +288,15 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
         raise torch.OutOfMemoryError("forced clone failure")
 
     monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
+
+    launches = []
+    gemm = gemm_tuned.fn
+
+    def recording_gemm(A, B, out, *args, **kwargs):
+        launches.append(out.data_ptr())
+        return gemm(A, B, out, *args, **kwargs)
+
+    monkeypatch.setattr(gemm_tuned, "fn", recording_gemm)
 
     # The prune keeps only this arch's configs: take three of them for a short tune.
     arch = get_device_capacity(torch.device("cuda"))[0]
@@ -299,4 +314,5 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     ref = out + A.float() @ B.float()
     gemm_add(A=A, B=B, C=out, out=out, tuned=True)
 
+    assert launches.count(out.data_ptr()) > 3  # the trials ran on out itself
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-3)
