@@ -714,10 +714,10 @@ def test_epi_mod_gated_full_width_output(cluster_M):
     device = "cuda"
     torch.random.manual_seed(6)
     l, m, N, k = 2, 512, 2048, 736
-    A = torch.randn((l, m, k), device=device, dtype=torch.bfloat16) / math.sqrt(k) * 4
-    B = torch.randn((l, N, k), device=device, dtype=torch.bfloat16) / math.sqrt(k) * 4
-    postact = torch.empty((l, m, N // 2), device=device, dtype=torch.bfloat16)
-    preact = torch.empty((l, m, N), device=device, dtype=torch.bfloat16)
+    A = torch.randn((l, m, k), dtype=torch.bfloat16, device=device) / math.sqrt(k) * 4
+    B = torch.randn((l, N, k), dtype=torch.bfloat16, device=device) / math.sqrt(k) * 4
+    postact = torch.empty((l, m, N // 2), dtype=torch.bfloat16, device=device)
+    preact = torch.empty((l, m, N), dtype=torch.bfloat16, device=device)
 
     swiglu_preact_mod.gemm(
         A,
