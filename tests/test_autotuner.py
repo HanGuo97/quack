@@ -127,8 +127,8 @@ def test_autotune_wedged_pool_falls_back_in_process(monkeypatch):
 @pytest.mark.parametrize("requires_grad", [False, True])
 def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad):
     """When the L2-cold clone sets do not fit, the legacy bench runs the trials
-    on the caller's tensor and restores it after each one, so the first call is
-    exact, also for a requires-grad arg in grad mode.
+    on the caller's tensor and restores it after each one, so delta is added to
+    it exactly once, also for a requires-grad arg in grad mode.
     """
     import torch
 
@@ -162,7 +162,7 @@ def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad)
 
     assert launches.count(buf.data_ptr()) > 3  # the trials ran on the caller's tensor
     assert all(t[0] != float("inf") for t in tuner.configs_timings.values())  # no trial raised
-    assert torch.equal(buf.detach(), buf0 + delta)
+    assert torch.equal(buf, buf0 + delta)
 
 
 @pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
@@ -175,14 +175,14 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
     from quack import autotuner
     from quack.autotuner import Autotuner, AutotuneConfig
 
-    l2_cold = []
+    l2_cold_blocks = []
     bench_l2_cold = autotuner._bench_cuda_graph_l2_rotate
 
-    def counting_bench_l2_cold(*args, **kwargs):
-        l2_cold.append(1)
-        return bench_l2_cold(*args, **kwargs)
+    def recording_bench_l2_cold(*args, extra_kwargs, **kwargs):
+        l2_cold_blocks.append(extra_kwargs["block"])
+        return bench_l2_cold(*args, extra_kwargs=extra_kwargs, **kwargs)
 
-    monkeypatch.setattr(autotuner, "_bench_cuda_graph_l2_rotate", counting_bench_l2_cold)
+    monkeypatch.setattr(autotuner, "_bench_cuda_graph_l2_rotate", recording_bench_l2_cold)
 
     launches = []
 
@@ -202,21 +202,68 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
     buf = buf0.clone()
     tuner(buf, delta)
 
-    assert len(l2_cold) == 3  # every config
+    assert sorted(l2_cold_blocks) == [0, 1, 2]  # every config, on clones
     assert launches.count(buf.data_ptr()) == 1  # only the real call
+    assert all(t[0] != float("inf") for t in tuner.configs_timings.values())  # no trial raised
     assert torch.equal(buf, buf0 + delta)
 
 
 @pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
 def test_autotune_restore_value_on_compile_pending(monkeypatch):
-    """A trial that writes and then raises CompilePending (a BaseException) is
-    still restored by the legacy bench.
+    """A config whose kernel writes and then raises CompilePending (a
+    BaseException) has its write undone before it is rotated to the back and
+    retried, so delta is added to the caller's tensor exactly once.
     """
     import torch
 
     from quack.autotuner import Autotuner, AutotuneConfig
     from quack.cache import async_compile
     from quack.cache.async_compile import CompilePending
+
+    class _StubPool:
+        """poll() reports 'pending' once per sha, then 'done'."""
+
+        def __init__(self):
+            self.polls = {}
+
+        def poll(self, sha):
+            n = self.polls.get(sha, 0) + 1
+            self.polls[sha] = n
+            return ("pending" if n == 1 else "done"), None
+
+    stub = _StubPool()
+    monkeypatch.setattr(async_compile, "_active_pool", stub)
+
+    raised_once = set()
+
+    def kernel(acc, x, block: int = 0):
+        # Every config is "cold": its first invocation writes, then defers.
+        acc.add_(x)
+        if block not in raised_once:
+            raised_once.add(block)
+            raise CompilePending(str(block) * 64, "fake._compile_kernel")
+
+    # A custom do_bench selects the legacy bench, which runs on the caller's tensor.
+    def do_bench(fn, quantiles=None, **kw):
+        fn()
+        return [1.0, 1.0, 1.0]
+
+    tuner = Autotuner(
+        kernel,
+        key=[],
+        configs=[AutotuneConfig(block=b) for b in (0, 1, 2)],
+        restore_value=["acc"],
+        do_bench=do_bench,
+    )
+    torch.manual_seed(0)
+    buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
+    delta = torch.randn_like(buf0)
+    buf = buf0.clone()
+    tuner(buf, delta)
+
+    assert stub.polls == {str(b) * 64: 2 for b in (0, 1, 2)}  # one rotation, one release each
+    assert len(tuner.configs_timings) == 3
+    assert torch.equal(buf, buf0 + delta)
 
 
 @pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
@@ -234,16 +281,18 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     def fail(*args, **kwargs):
         raise torch.OutOfMemoryError("forced clone failure")
 
+    monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
+
+    # The prune keeps only this arch's configs: take three of them for a short tune.
     arch = get_device_capacity(torch.device("cuda"))[0]
     configs = [c for c in gemm_tuned.configs if c.kwargs["config"].device_capacity == arch][:3]
-    monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
     monkeypatch.setattr(gemm_tuned, "configs", configs)
     # A cached pick (in memory or on disk) would skip the trials: force a fresh tune.
     monkeypatch.setattr(gemm_tuned, "cache", {})
     monkeypatch.setattr(gemm_tuned, "cache_results", False)
 
-    torch.manual_seed(0)
     m, n, k = 512, 384, 256
+    torch.manual_seed(0)
     A = torch.randn(m, k, dtype=torch.bfloat16, device="cuda")
     B = torch.randn(k, n, dtype=torch.bfloat16, device="cuda")
     out = torch.randn(m, n, dtype=torch.float32, device="cuda")
