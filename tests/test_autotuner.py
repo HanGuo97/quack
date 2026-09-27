@@ -155,7 +155,7 @@ def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad)
         restore_value=["acc"],
     )
     torch.manual_seed(0)
-    buf0 = torch.randn(4, device="cuda")
+    buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
     delta = torch.randn_like(buf0)
     buf = buf0.clone().requires_grad_(requires_grad)
     tuner(buf, delta)
@@ -190,7 +190,7 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
     )
 
     torch.manual_seed(0)
-    buf0 = torch.randn(4, device="cuda")
+    buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
     delta = torch.randn_like(buf0)
     buf = buf0.clone()
     tuner(buf, delta)
@@ -227,6 +227,8 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
     def fail(*args, **kwargs):
         raise torch.OutOfMemoryError("forced clone failure")
 
+    arch = get_device_capacity(torch.device("cuda"))[0]
+    configs = [c for c in gemm_tuned.configs if c.kwargs["config"].device_capacity == arch][:3]
     monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
     monkeypatch.setattr(gemm_tuned, "configs", configs)
     # A cached pick (in memory or on disk) would skip the trials: force a fresh tune.
