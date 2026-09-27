@@ -175,6 +175,14 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
     from quack import autotuner
     from quack.autotuner import Autotuner, AutotuneConfig
 
+    l2_cold = []
+    bench_l2_cold = autotuner._bench_cuda_graph_l2_rotate
+
+    def counting_bench_l2_cold(*args, **kwargs):
+        l2_cold.append(1)
+        return bench_l2_cold(*args, **kwargs)
+
+    monkeypatch.setattr(autotuner, "_bench_cuda_graph_l2_rotate", counting_bench_l2_cold)
 
     launches = []
 
@@ -188,7 +196,6 @@ def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
         configs=[AutotuneConfig(block=b) for b in (0, 1, 2)],
         restore_value=["acc"],
     )
-
     torch.manual_seed(0)
     buf0 = torch.randn(4, dtype=torch.float32, device="cuda")
     delta = torch.randn_like(buf0)
