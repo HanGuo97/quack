@@ -706,33 +706,37 @@ def test_epi_mod_gated_full_width_output(cluster_M):
     """GemmGated as a mod plus a full-width TileStore(gated=False) output: the fn
     returns the raw acc Pair, stored interleaved like D, and postact is unchanged."""
 
-    @gemm_epilogue(outputs=("postact", TileStore("preact", gated=False)), mode="acc_pair")
+    # preact first: outputs keep declaration order, not grouped by width
+    @gemm_epilogue(outputs=(TileStore("preact", gated=False), "postact"), mode="acc_pair")
     def swiglu_preact_mod(acc):
         gate, up = unpack(acc)
-        return {"postact": swiglu(gate, up), "preact": acc}
+        return {"D": acc * 2.0, "postact": swiglu(gate, up), "preact": acc}
 
     device = "cuda"
     torch.random.manual_seed(6)
     l, m, N, k = 2, 512, 2048, 736
     A = torch.randn((l, m, k), dtype=torch.bfloat16, device=device) / math.sqrt(k) * 4
     B = torch.randn((l, N, k), dtype=torch.bfloat16, device=device) / math.sqrt(k) * 4
+    D = torch.empty((l, m, N), dtype=torch.bfloat16, device=device)
     postact = torch.empty((l, m, N // 2), dtype=torch.bfloat16, device=device)
     preact = torch.empty((l, m, N), dtype=torch.bfloat16, device=device)
 
     swiglu_preact_mod.gemm(
         A,
         B,
-        None,
+        D,
         epi_args=dict(postact=postact, preact=preact),
         tile_M=128,
         tile_N=256,
-        cluster_M=cluster_M,
+        cluster_M=cluster_M,  # see cluster_M note on test_epi_mod_gated_swiglu
         cluster_N=1,
     )
 
     x = torch.einsum("lmk,lnk->lmn", A.float(), B.float())
     gate, up = x[..., 0::2], x[..., 1::2]
     ref = torch.nn.functional.silu(gate) * up
+    # D is 2 * acc, so a preact store that reused D's registers would not match
+    assert torch.equal(D, preact * 2)
     _rel_check(preact, x, "preact")
     _rel_check(postact, ref, "postact")
 
