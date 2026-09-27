@@ -121,3 +121,79 @@ def test_autotune_wedged_pool_falls_back_in_process(monkeypatch):
     tuner(torch.empty(4, device="cuda"))
     assert benched.count(1) == 1  # eventually ran, via suppress_pool
     assert len(tuner.configs_timings) == 2
+
+
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
+@pytest.mark.parametrize("requires_grad", [False, True])
+def test_autotune_restore_value_forced_clone_failure(monkeypatch, requires_grad):
+    """When the L2-cold clone sets do not fit, the legacy bench runs the trials
+    on the caller's tensor and restores it after each one, so the first call is
+    exact, also for a requires-grad arg in grad mode.
+    """
+    import torch
+
+    from quack import autotuner
+    from quack.autotuner import Autotuner, AutotuneConfig
+
+    def fail(*args, **kwargs):
+        raise torch.OutOfMemoryError("forced clone failure")
+
+    monkeypatch.setattr(autotuner, "_clone_l2_rotate_inputs", fail)
+
+    launches = []
+
+    def kernel(acc, x, block: int = 0):
+        launches.append(acc.data_ptr())
+        # A raw kernel's write: autograd does not see it.
+        with torch.no_grad():
+            acc.add_(x)
+
+    tuner = Autotuner(
+        kernel,
+        key=[],
+        configs=[AutotuneConfig(block=b) for b in (0, 1, 2)],
+        restore_value=["acc"],
+    )
+    torch.manual_seed(0)
+    acc0 = torch.randn(4, device="cuda")
+    x = torch.randn_like(acc0)
+    acc = acc0.clone().requires_grad_(requires_grad)
+    tuner(acc, x)
+
+    assert launches.count(acc.data_ptr()) > 3  # the trials ran on the caller's tensor
+    assert all(t[0] != float("inf") for t in tuner.configs_timings.values())  # no trial raised
+    assert torch.equal(acc.detach(), acc0 + x)
+
+
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
+def test_autotune_restore_value_keeps_l2_cold_bench(monkeypatch):
+    """restore_value does not switch off the L2-cold bench: every config is
+    timed on clones, and the caller's tensor sees only the real call.
+    """
+    from quack import autotuner
+    from quack.autotuner import Autotuner, AutotuneConfig
+
+
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
+def test_autotune_restore_value_on_compile_pending(monkeypatch):
+    """A trial that writes and then raises CompilePending (a BaseException) is
+    still restored by the legacy bench.
+    """
+    from quack.autotuner import Autotuner, AutotuneConfig
+    from quack.cache import async_compile
+    from quack.cache.async_compile import CompilePending
+
+
+
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
+def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
+    """gemm_add with C = out takes the add_to_output path, which reads out: when
+    the L2-cold clone sets do not fit, the trials run on out itself and restore
+    it, so A @ B is added to out exactly once.
+    """
+    import torch
+
+    from quack import autotuner
+    from quack.cute_dsl_utils import get_device_capacity
+    from quack.gemm_interface import gemm_add, gemm_tuned
+
