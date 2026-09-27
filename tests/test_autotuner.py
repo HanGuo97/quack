@@ -73,7 +73,10 @@ def test_autotune_bench_loop_defers_and_retries(monkeypatch):
     import torch
 
     x = torch.empty(4, device="cuda")
-    tuner(x)
+    try:
+        tuner(x)
+    except CompilePending:  # the quack pytest plugin would report it as a pass
+        pytest.fail("CompilePending escaped the autotuner")
 
     # Bench order: block=1 deferred, so it benched AFTER block 2 (exactly
     # once). The trailing 0 is __call__'s real invocation with the winner.
@@ -118,7 +121,10 @@ def test_autotune_wedged_pool_falls_back_in_process(monkeypatch):
     )
     import torch
 
-    tuner(torch.empty(4, device="cuda"))
+    try:
+        tuner(torch.empty(4, device="cuda"))
+    except CompilePending:  # the quack pytest plugin would report it as a pass
+        pytest.fail("CompilePending escaped the autotuner")
     assert benched.count(1) == 1  # eventually ran, via suppress_pool
     assert len(tuner.configs_timings) == 2
 
