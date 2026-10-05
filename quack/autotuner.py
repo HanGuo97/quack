@@ -329,14 +329,12 @@ class Autotuner:
 
                 @torch.compiler.disable  # Don't want any tracing here
                 def benchmark():
-                    # no in-memory or on-disk result: raise rather than benchmark
+                    # no cached result: raise rather than benchmark
                     if is_autotuning_disallowed():
                         raise RuntimeError(
-                            f"{self.fn.__name__}: no cached autotuning result for key {key}, and "
-                            f"tuning is disallowed ({PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING=1). "
-                            f"Fill the cache first with a run that sets "
-                            f"{PACKAGE_NAME.upper()}_CACHE_AUTOTUNING=1 and the same "
-                            f"{PACKAGE_NAME.upper()}_CACHE_DIR"
+                            f"{self.fn.__name__}: no cached autotuning result for key {key} and "
+                            f"{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING=1; fill the cache first "
+                            f"with {PACKAGE_NAME.upper()}_CACHE_AUTOTUNING=1"
                         )
                     # Compile/bench overlap via the async compile pool
                     # (quack.cache.async_compile): the bench loop runs inside
@@ -544,9 +542,8 @@ def autotune(
     If the environment variable :code:`{PACKAGE_NAME.upper()}_PRINT_AUTOTUNING` is set to
     :code:`"1"`, we will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
-    If the environment variable :code:`{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING` is set to
-    :code:`"1"`, a kernel with no cached result (in memory or on disk) raises instead of
-    autotuning; cached results still run. The variable is read on every cache miss.
+    If :code:`{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING` is :code:`"1"`, a cache miss raises
+    an error instead of autotuning.
 
     :param configs: a list of :code:`AutotuneConfig` objects
     :type configs: list[AutotuneConfig]
