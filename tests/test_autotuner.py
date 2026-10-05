@@ -323,3 +323,45 @@ def test_autotune_restore_value_gemm_add_c_is_out(monkeypatch):
 
     assert launches.count(out.data_ptr()) > 3  # the trials ran on out itself
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=1e-3)
+
+
+@pytest.mark.skipif(not __import__("torch").cuda.is_available(), reason="_gpu_warmup needs a GPU")
+def test_disallow_autotuning(monkeypatch, tmp_path):
+    """With QUACK_DISALLOW_AUTOTUNING=1, a cached pick (on disk or in memory) still
+    runs, and a cache miss raises instead of autotuning.
+    """
+    import torch
+
+    from quack.autotuner import Autotuner, AutotuneConfig
+
+    # An empty disk cache, private to this test.
+    monkeypatch.setenv("QUACK_CACHE_DIR", str(tmp_path))
+
+    launches = []
+
+    def kernel(x, block: int = 0):
+        launches.append(block)
+
+    x = torch.empty(4, device="cuda")
+    y = torch.empty(8, device="cuda")
+
+    # Nothing cached: raises before any trial.
+    monkeypatch.setenv("QUACK_DISALLOW_AUTOTUNING", "1")
+    with pytest.raises(RuntimeError, match="QUACK_DISALLOW_AUTOTUNING=1"):
+        make_tuner()(x)
+    assert launches == []
+
+    # Tuning allowed: both configs are tried, then the pick runs and is saved to disk.
+    monkeypatch.delenv("QUACK_DISALLOW_AUTOTUNING")
+    make_tuner()(x)
+
+    # A new tuner reads the pick from disk, then from memory: no trials.
+    monkeypatch.setenv("QUACK_DISALLOW_AUTOTUNING", "1")
+    launches.clear()
+    tuner = make_tuner()
+    tuner(x)
+    tuner(x)
+
+    # A shape never tuned is a cache miss.
+    with pytest.raises(RuntimeError, match="QUACK_DISALLOW_AUTOTUNING=1"):
+        tuner(y)
