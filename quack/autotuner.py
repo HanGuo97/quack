@@ -39,6 +39,10 @@ def default_cache_dir():
     return os.path.join(get_home_dir(), f".{PACKAGE_NAME}", "cache")
 
 
+def is_autotuning_disallowed():
+    return os.getenv(f"{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING", None) == "1"
+
+
 class FileCacheManager(triton.runtime.cache.FileCacheManager):
     def __init__(self, key):
         super().__init__(key)
@@ -325,6 +329,15 @@ class Autotuner:
 
                 @torch.compiler.disable  # Don't want any tracing here
                 def benchmark():
+                    # no in-memory or on-disk result: raise rather than benchmark
+                    if is_autotuning_disallowed():
+                        raise RuntimeError(
+                            f"{self.fn.__name__}: no cached autotuning result for key {key}, and "
+                            f"tuning is disallowed ({PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING=1). "
+                            f"Fill the cache first with a run that sets "
+                            f"{PACKAGE_NAME.upper()}_CACHE_AUTOTUNING=1 and the same "
+                            f"{PACKAGE_NAME.upper()}_CACHE_DIR"
+                        )
                     # Compile/bench overlap via the async compile pool
                     # (quack.cache.async_compile): the bench loop runs inside
                     # pool_scope(). A config whose kernel isn't compiled yet
@@ -531,6 +544,9 @@ def autotune(
     If the environment variable :code:`{PACKAGE_NAME.upper()}_PRINT_AUTOTUNING` is set to
     :code:`"1"`, we will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
+    If the environment variable :code:`{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING` is set to
+    :code:`"1"`, a kernel with no cached result (in memory or on disk) raises instead of
+    autotuning; cached results still run. The variable is read on every cache miss.
 
     :param configs: a list of :code:`AutotuneConfig` objects
     :type configs: list[AutotuneConfig]
