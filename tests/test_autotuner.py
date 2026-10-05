@@ -343,6 +343,18 @@ def test_autotune_disallow_raises_on_cache_miss(monkeypatch, tmp_path):
     def kernel(x, block: int = 0):
         launches.append(block)
 
+    def do_bench(fn, quantiles=None, **kw):
+        fn()
+        return [3.0 - launches[-1], 1.0, 1.0]  # block=2 fastest, not the first config
+
+    # Built before QUACK_DISALLOW_AUTOTUNING is set, like an @autotune tuner at import time.
+    tuner = Autotuner(
+        kernel,
+        key=[],
+        configs=[AutotuneConfig(block=b) for b in (0, 1, 2)],
+        do_bench=do_bench,
+        cache_results=False,
+    )
     x = torch.empty(4, device="cuda")
     y = torch.empty(8, device="cuda")
 
