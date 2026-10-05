@@ -334,7 +334,7 @@ class Autotuner:
                         raise RuntimeError(
                             f"{self.fn.__name__}: no cached autotuning result for key {key} and "
                             f"{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING=1; fill the cache first "
-                            f"with {PACKAGE_NAME.upper()}_CACHE_AUTOTUNING=1"
+                            f"with {PACKAGE_NAME.upper()}_CACHE_AUTOTUNING=1 set in both runs"
                         )
                     # Compile/bench overlap via the async compile pool
                     # (quack.cache.async_compile): the bench loop runs inside
@@ -542,8 +542,8 @@ def autotune(
     If the environment variable :code:`{PACKAGE_NAME.upper()}_PRINT_AUTOTUNING` is set to
     :code:`"1"`, we will print a message to stdout after autotuning each
     kernel, including the time spent autotuning and the best configuration.
-    If :code:`{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING` is :code:`"1"`, a cache miss raises
-    an error instead of autotuning.
+    If the environment variable :code:`{PACKAGE_NAME.upper()}_DISALLOW_AUTOTUNING` is set to
+    :code:`"1"`, a cache miss raises an error instead of autotuning.
 
     :param configs: a list of :code:`AutotuneConfig` objects
     :type configs: list[AutotuneConfig]
