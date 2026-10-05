@@ -1,4 +1,4 @@
-__version__ = "0.6.5"
+__version__ = "0.6.5+fork.1"
 
 import os
 
